@@ -14,7 +14,7 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 logger = logging.getLogger(__name__)
 
 # Настройка Selenium
-driver_path = "C:\\coding\\parsbot\\parsbot\\chromedriver.exe"
+driver_path = "УКАЖИТЕ ПУТЬ К CHROME WEBDRIVEER"
 service = Service(driver_path)
 driver = webdriver.Chrome(service=service)
 logger.info("Драйвер Chrome запущен")
@@ -22,8 +22,8 @@ logger.info("Драйвер Chrome запущен")
 # Данные для авторизации
 login_url = "https://dmb.sundesiremedia.com/"
 stats_url = "https://dmb.sundesiremedia.com/trend-stream/lastweek"
-username = "coldfear"
-password = "Weakky1703@"
+username = "ЛОГИН ОТ СМВ"
+password = "ПАРОЛЬ ОТ СМВ"
 
 def authorize():
     logger.info("Начинаю авторизацию...")
@@ -38,7 +38,7 @@ def authorize():
     WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.CLASS_NAME, "profile-username")))
     logger.info("Авторизация успешна")
 
-def get_all_tracks_stats():
+def get_all_tracks_stats(artist_name=None):
     logger.info("Получаю статистику треков...")
     authorize()
     
@@ -87,20 +87,23 @@ def get_all_tracks_stats():
         artist = artist_td.find("span", class_="column-value").get_text(strip=True) if artist_td else "Unknown"
         streams = streams_td.find("span", class_="column-value").get_text(strip=True) if streams_td else "0"
         
-        results.append(f"{title} — {artist} — {streams} стримов")
+        # Фильтруем по имени артиста, если оно указано (регистронезависимо)
+        if artist_name is None or artist.lower() == artist_name.lower():
+            results.append(f"{title} — {artist} — {streams} стримов")
     
     if results:
         logger.info(f"Найдено {len(results)} треков")
         return "\n".join(results)
     else:
         logger.warning("Треки не найдены")
-        return "Треки не найдены"
+        return f"Треки для артиста '{artist_name}' не найдены" if artist_name else "Треки не найдены"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info("Получена команда /start")
     await update.message.reply_text(
         "Привет! Я бот для проверки статистики стримов на DMB.\n"
-        "Используй /stats для получения списка всех треков."
+        "Используй /stats для списка всех треков.\n"
+        "Используй /artist <имя_артиста> для поиска по артисту."
     )
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -121,13 +124,38 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         driver.quit()
         logger.info("Драйвер закрыт")
 
+async def artist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info("Получена команда /artist")
+    if not context.args:
+        await update.message.reply_text("Пожалуйста, укажи имя артиста после команды, например: /artist coldfff")
+        return
+    
+    artist_name = " ".join(context.args)  # Собираем имя артиста из аргументов
+    logger.info(f"Поиск треков для артиста: {artist_name}")
+    await update.message.reply_text(f"Ищу треки для '{artist_name}'...")
+    
+    try:
+        stats = get_all_tracks_stats(artist_name)
+        if len(stats) > 4096:
+            for i in range(0, len(stats), 4096):
+                await update.message.reply_text(stats[i:i + 4096])
+        else:
+            await update.message.reply_text(stats)
+    except Exception as e:
+        logger.error(f"Ошибка: {str(e)}")
+        await update.message.reply_text(f"Ошибка: {str(e)}")
+    finally:
+        driver.quit()
+        logger.info("Драйвер закрыт")
+
 def main():
-    token = "7624800237:AAEZHPHTZc1btzeM8_ubSQhCEXUDi2Jy6Xs"
+    token = "ТОКЕН ВАШЕГО ТГ БОТА"
     logger.info(f"Инициализация бота с токеном: {token}")
     application = Application.builder().token(token).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("artist", artist))
 
     logger.info("Бот запущен")
     application.run_polling()
