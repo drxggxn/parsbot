@@ -9,7 +9,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 import time
 import unicodedata
 import logging
-from selenium.common.exceptions import TimeoutException
+import os
+import datetime
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -25,12 +26,12 @@ logger.info("Драйвер Chrome успешно запущен")
 
 # Данные для авторизации
 login_url = "https://dmb.sundesiremedia.com/"
+stats_url = "https://dmb.sundesiremedia.com/trend-stream/lastweek"
 username = "coldfear"
 password = "Weakky1703@"
-logger.info(f"Установлены данные для авторизации: URL={login_url}, username={username}")
+html_file = "stats.html"
 
 def is_logged_in():
-    """Проверяет, авторизован ли бот."""
     logger.info("Проверка статуса авторизации...")
     try:
         WebDriverWait(driver, 5).until(
@@ -42,65 +43,19 @@ def is_logged_in():
         logger.warning("Сессия неактивна, требуется авторизация")
         return False
 
-def authorize():
-    """Авторизация на сайте."""
-    logger.info("Начинаю процесс авторизации...")
-    logger.info(f"Открываю страницу авторизации: {login_url}")
+def authorize_and_download():
+    logger.info("Начинаю процесс авторизации и скачивания HTML...")
     driver.get(login_url)
-    
-    logger.info("Ожидаю загрузки формы логина...")
-    WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.ID, "login"))
-    )
-    logger.info("Форма логина найдена")
-    
-    logger.info("Ищу поле для ввода логина...")
-    login_field = driver.find_element(By.ID, "login")
-    logger.info("Поле логина найдено")
-    logger.info(f"Ввожу логин: {username}")
-    login_field.send_keys(username)
-    
-    logger.info("Ищу поле для ввода пароля...")
-    password_field = driver.find_element(By.ID, "pass")
-    logger.info("Поле пароля найдено")
-    logger.info("Ввожу пароль...")
-    password_field.send_keys(password)
-    
-    logger.info("Ищу кнопку входа...")
+    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "login")))
+    driver.find_element(By.ID, "login").send_keys(username)
+    driver.find_element(By.ID, "pass").send_keys(password)
     try:
-        login_button = WebDriverWait(driver, 5).until(
-            EC.element_to_be_clickable((By.XPATH, "//input[@value='Login to DMB']"))
-        )
-        logger.info("Найдена кнопка 'Login to DMB'")
+        driver.find_element(By.XPATH, "//input[@value='Login to DMB']").click()
     except:
-        logger.warning("Кнопка 'Login to DMB' не найдена, ищу запасной вариант...")
-        login_button = WebDriverWait(driver, 5).until(
-            EC.element_to_be_clickable((By.XPATH, "//input[@type='submit']"))
-        )
-        logger.info("Найдена кнопка submit (запасной вариант)")
+        driver.find_element(By.XPATH, "//input[@type='submit']").click()
+    WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.CLASS_NAME, "profile-username")))
+    logger.info("Авторизация завершена успешно")
     
-    logger.info("Нажимаю кнопку входа...")
-    login_button.click()
-    
-    logger.info("Ожидаю появления дашборда...")
-    try:
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CLASS_NAME, "profile-username"))
-        )
-        logger.info("Авторизация завершена успешно")
-    except:
-        logger.error(f"Не удалось подтвердить вход. Текущий URL: {driver.current_url}")
-        with open("login_page_after_submit.html", "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-        logger.info("HTML страницы после попытки входа сохранён в login_page_after_submit.html")
-        raise Exception("Ошибка авторизации — дашборд не загрузился")
-
-def go_to_stats():
-    if not is_logged_in():
-        logger.error("Сессия истекла, требуется авторизация")
-        raise Exception("Сессия истекла, требуется авторизация")
-    
-    stats_url = "https://dmb.sundesiremedia.com/trend-stream/lastweek"
     logger.info(f"Перехожу на страницу статистики: {stats_url}")
     driver.get(stats_url)
     
@@ -109,48 +64,40 @@ def go_to_stats():
         EC.presence_of_element_located((By.TAG_NAME, "body"))
     )
     
-    current_url = driver.current_url
-    logger.info(f"Текущий URL: {current_url}")
-    if "trend-stream/lastweek" not in current_url:
-        raise Exception(f"Редирект на неверную страницу: {current_url}")
+    # Прокручиваем страницу для загрузки видимых данных
+    logger.info("Прокручиваю страницу...")
+    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+    time.sleep(5)  # Даём время на рендеринг
     
-    # Проверяем таблицу через JavaScript
-    logger.info("Проверяю наличие строк таблицы через JavaScript...")
-    for _ in range(3):  # 3 попытки с интервалом
-        row_count = driver.execute_script(
-            "return document.querySelectorAll('table.list.control-list tr.control-list-row').length;"
-        )
-        logger.info(f"Найдено строк: {row_count}")
-        if row_count > 0:
-            logger.info("Таблица загружена")
-            return
-        time.sleep(5)  # Ждем 5 секунд между попытками
-    
-    # Если таблица не загрузилась, пробуем найти данные в JS-переменных
-    logger.info("Таблица не найдена, ищу данные в JavaScript...")
-    js_data = driver.execute_script("return window.someData || window.chartData || [];")
-    if js_data:
-        logger.info(f"Найдены данные в JavaScript: {js_data[:200]}...")
-        # Здесь нужно будет обработать js_data в get_artist_stats()
-    else:
-        logger.error("Данные не найдены ни в таблице, ни в JS")
-        with open("stats_page_error.html", "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-        raise Exception("Не удалось найти данные")
+    # Сохраняем HTML
+    html = driver.page_source
+    with open(html_file, "w", encoding="utf-8") as f:
+        f.write(html)
+    logger.info(f"HTML сохранён в {html_file}")
+
+def is_file_fresh():
+    """Проверяет, актуален ли файл (обновлён менее 24 часов назад)."""
+    if not os.path.exists(html_file):
+        return False
+    file_time = datetime.datetime.fromtimestamp(os.path.getmtime(html_file))
+    current_time = datetime.datetime.now()
+    age = current_time - file_time
+    return age.total_seconds() < 24 * 60 * 60  # 24 часа
 
 def get_artist_stats(artist_name):
-    """Получение статистики по артисту: название трека, никнейм, стримы."""
-    logger.info(f"Парсинг статистики для артиста '{artist_name}'...")
+    logger.info(f"Парсинг статистики для артиста '{artist_name}' из файла {html_file}...")
     
-    html = driver.page_source
-    with open("stats_page.html", "w", encoding="utf-8") as f:
-        f.write(html)
-    logger.info("HTML страницы сохранён в stats_page.html для отладки")
+    # Читаем сохранённый HTML
+    if not os.path.exists(html_file):
+        logger.error(f"Файл {html_file} не найден")
+        return "Файл статистики не найден"
+    
+    with open(html_file, "r", encoding="utf-8") as f:
+        html = f.read()
     
     soup = BeautifulSoup(html, "html.parser")
-    
-    logger.info("Ищу таблицу с классом 'list control-list'...")
     table = soup.find("table", class_="list control-list")
+    
     if not table:
         logger.error("Таблица не найдена в HTML")
         return "Таблица не найдена"
@@ -160,26 +107,38 @@ def get_artist_stats(artist_name):
         logger.error("В таблице не найден <tbody>")
         return "Таблица не найдена"
     
-    rows = tbody.find_all("tr", class_="control-list-row")
-    logger.info(f"Найдено {len(rows)} строк в таблице")
+    # Собираем весь текст из <tbody>
+    tbody_text = tbody.get_text(separator="\n").strip()
+    logger.info(f"Текст из <tbody>:\n{tbody_text[:500]}...")  # Показываем первые 500 символов
+    
+    # Разбиваем текст на строки
+    lines = [line.strip() for line in tbody_text.split("\n") if line.strip()]
+    logger.info(f"Найдено {len(lines)} строк текста")
     
     results = []
     artist_name_normalized = unicodedata.normalize("NFKD", artist_name).strip().lower()
     
-    for i, row in enumerate(rows, 1):
-        try:
-            title = row.find("td", class_="field-sale_title").find("span", class_="column-value").text.strip()
-            artist = row.find("td", class_="field-sale_artist").find("span", class_="column-value").text.strip()
-            streams = row.find("td", class_="field-sale_units").find("span", class_="column-value").text.strip()
+    # Классификация данных
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # Ищем строку с артистом
+        if artist_name_normalized in unicodedata.normalize("NFKD", line).lower():
+            title = line  # Предполагаем, что это название или артист
+            artist = line
+            streams = None
             
-            artist_normalized = unicodedata.normalize("NFKD", artist).strip().lower()
-            logger.debug(f"Строка {i}: Название='{title}', Артист='{artist}', Стримы='{streams}'")
+            # Проверяем следующую строку на стримы
+            if i + 1 < len(lines) and re.match(r"^\d+$", lines[i + 1]):
+                streams = lines[i + 1]
+                i += 1
             
-            if artist_name_normalized in artist_normalized:
+            # Если есть стримы, уточняем название
+            if streams:
+                if i > 0 and lines[i - 2] and not re.match(r"^\d+$", lines[i - 2]):
+                    title = lines[i - 2]
                 results.append(f"{title} — {artist} — {streams} стримов")
-        except AttributeError:
-            logger.warning(f"Ошибка в строке {i}: не удалось извлечь данные")
-            continue
+        i += 1
     
     if results:
         logger.info(f"Найдено {len(results)} записей для артиста '{artist_name}'")
@@ -207,15 +166,13 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"Обрабатываю запрос для '{artist_name}'...")
 
     try:
-        if "authorized" not in context.bot_data or not is_logged_in():
-            logger.info("Требуется авторизация")
-            authorize()
-            go_to_stats()
-            context.bot_data["authorized"] = True
+        # Если файла нет или он старый, скачиваем новый
+        if not is_file_fresh():
+            logger.info("Файл отсутствует или устарел, требуется авторизация и скачивание")
+            authorize_and_download()
         else:
-            logger.info("Уже авторизован, обновляю страницу статистики")
-            go_to_stats()
-
+            logger.info("Использую существующий файл stats.html")
+        
         stats = get_artist_stats(artist_name)
         await update.message.reply_text(stats)
     except Exception as e:
